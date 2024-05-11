@@ -1,88 +1,69 @@
 #include <stdio.h>
-#include <stdbool.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#define NUM_THREADS 5 // Количество потоков
 
-#define P 3 // Количество процессов
-#define R 2 // Количество типов ресурсов
+//Общая переменная и мьютекс
+int shared_variable = 0;
+pthread_mutex_t mutex;
 
-// Функция для проверки возможности выделения ресурсов
-bool isSafe(int avialable[], int allocation[][R], int need[][R]){
-	bool finish[P] = {0};
-	int work[R];
-	for(int i = 0; i < R; i++){
-		work[i] = avialable[i];
+// Функция, выполняемая потоками
+void* increment_variable(void* arg){
+	int increment = *(int*) arg;
+
+	// Захват мьютекса перед изменением переменной
+	int ret;
+	ret = pthread_mutex_lock(&mutex);
+	if(ret != 0){
+		fprintf(stderr, "Не удалось захватить мьютекс: %s\n", strerror(ret));
+		return NULL;
+	}
+	shared_variable += increment;
+	ret = pthread_mutex_unlock(&mutex);
+	if(ret != 0){
+		fprintf(stderr, "Не удалось освободить мьютекс: %s\n", strerror(ret));
 	}
 
-	while(true){
-		int found = false;
-		for(int p = 0; p < P; p++){
-			if(!finish[p]){
-				int j;
-				for(j = 0; j < R; j++)
-					if(need[p][j] > work[j])
-						break;
-				if(j == R){
-					for(int k = 0; k < R; k++)
-						work[k] += allocation[p][k];
-					finish[p] = true;
-					found - true;
-				}
-			}
-		}
-		if(!found)
-			break;
-	}
-	for(int i = 0; i < P; i++)
-		if(!finish[i])
-			return false;
-	return true;
-}
-
-bool requestResources(int pid, int request[], int avialable[], int allocation[][R], int need[][R]){
-	for(int i = 0; i < R; i++){
-		if(request[i] > need[pid][i] || request[i] > avialable[i]){
-			printf("Запрос не может быть удовлетворён.\n");
-			return false;
-		}
-	}
-
-	for(int i = 0; i < R; i++){
-		avialable[i] -= request[i];
-		allocation[pid][i] += request[i];
-		need[pid][i] -= request[i];
-	}
-
-	if(!isSafe(avialable, allocation, need)){
-		for(int i = 0; i < R; i++){
-			avialable[i] += request[i];
-			allocation[pid][i] -= request[i];
-			need[pid][i] += request[i];
-		}
-		printf("Запрос приводит к небезопасному состоянию, откат изменений.\n");
-		return false;
-	}
-
-	return true;
+	return NULL;
 }
 
 int main(){
-	int avialable[R] = {10, 10}; // Доступные ресурсы
-	int max[P][R] = { {7,5}, {3,2}, {9,0} }; // Максимальные требования каждого процесса
-	int allocation[P][R] = { {1,1}, {2,0}, {3,0} }; // Текущее выделение ресурсов
-	int need[P][R];
+	pthread_t threads[NUM_THREADS];
+	int increments[NUM_THREADS] = {10, 20, 30 , 40, 50};
 
-	// Расчёт требуемых ресурсов
-	for(int i = 0; i < P; i++)
-		for(int j = 0; j < R; j++)
-			need[i][j] = max[i][j] - allocation[i][j];
-
-	int requests[][R] = { {1,0}, {0,2}, {3,0}}; //Пример запросов
-	for(int i = 0; i < 3; i++){
-		printf("Обработка запроса %d: ", i + 1);
-		if(requestResources(i % P, requests[i], avialable, allocation, need))
-			printf("Запрос удовлетворен, система в безопасном состоянии.\n");
-		else
-			printf("Запрос не удовлетворён\n");
+	// Инициализация мьютекса
+	int ret = pthread_mutex_init(&mutex, NULL);
+	if(ret != 0){
+		fprintf(stderr, "Не удалось инициализировать мьютекс: %s\n", strerror(ret));
+		return EXIT_FAILURE;
 	}
 
-	return 0;
+	// Создание потоков
+	for(int i = 0; i < NUM_THREADS; i++){
+		ret = pthread_create(&threads[i], NULL, increment_variable, &increments[i]);
+		if(ret != 0){
+			fprintf(stderr, "Не удалось создать поток %d: %s\n", i, strerror(ret));
+			// Освобождение ресурсов в случае ошибки
+			for(int j = 0; j < i; j++){
+				pthread_join(threads[i], NULL);
+			}
+			pthread_mutex_destroy(&mutex);
+			return EXIT_FAILURE;
+		}
+	}
+
+	// Ожидание завершения потоков
+	for(int i = 0; i < NUM_THREADS; i++){
+		ret = pthread_join(threads[i], NULL);
+		if(ret !=0){
+			fprintf(stderr, "Не удалось соединиться с потоком %d: %s\n", i, strerror(ret));
+		}
+	}
+
+	//Вывод результата
+	printf("Окончательное значение общей переменной: %d\n", shared_variable);
+
+	return EXIT_SUCCESS;
 }
